@@ -1,0 +1,164 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+{% for import in imports %}
+use {{ import }};
+{% endfor %}
+
+/**
+ * {{ entity_name }} entity generated automatically.
+ * Table: {{ table_name }}
+ */
+{% if use_annotations %}
+/**
+ * @ORM\Entity(repositoryClass="{{ repository_name }}")
+ * @ORM\Table(name="{{ table_name }}")
+{% if has_lifecycle_callbacks %}
+ * @ORM\HasLifecycleCallbacks
+{% endif %}
+ */
+{% else %}
+#[ORM\Entity(repositoryClass: {{ repository_name }}::class)]
+#[ORM\Table(name: '{{ table_name }}')]
+{% if has_lifecycle_callbacks %}
+#[ORM\HasLifecycleCallbacks]
+{% endif %}
+{% endif %}
+class {{ entity_name }}
+{
+{% if constants is defined and constants is not empty %}
+{% for constant_name, constant_value in constants %}
+    /**
+     * Constant for value '{{ constant_value }}'
+     */
+    public const {{ constant_name }} = '{{ constant_value }}';
+
+{% endfor %}
+{% endif %}
+{% for property in properties %}
+    /**
+     * {{ property.comment ? property.comment : 'Property ' ~ property.name }}
+{% if property.enum_values is defined %}
+     *
+     * Available ENUM constants:
+{% for enum_value in property.enum_values %}
+     * - {{ enum_value }}
+{% endfor %}
+{% endif %}
+{% if property.set_values is defined %}
+     *
+     * Available SET values:
+{% for set_value in property.set_values %}
+     * - {{ set_value }}
+{% endfor %}
+{% endif %}
+     */
+{% if use_annotations %}
+{% if property.is_primary %}
+    /**
+     * @ORM\Id
+{% if property.auto_increment %}
+     * @ORM\GeneratedValue
+{% endif %}
+     * @ORM\Column(type="{{ property.doctrine_type }}"{% if property.length %}, length={{ property.length }}{% endif %}{% if not property.nullable %}, nullable=false{% endif %}{% if property.has_enum_class is defined and property.has_enum_class %}, enumType="{{ property.enum_fqn }}"{% endif %})
+     */
+{% else %}
+    /**
+     * @ORM\Column(type="{{ property.doctrine_type }}"{% if property.length %}, length={{ property.length }}{% endif %}{% if property.nullable %}, nullable=true{% endif %}{% if property.default is not null %}, options={"default": "{{ property.default }}"}{% endif %}{% if property.has_enum_class is defined and property.has_enum_class %}, enumType="{{ property.enum_fqn }}"{% endif %})
+     */
+{% endif %}
+{% else %}
+{% if property.is_primary %}
+    #[ORM\Id]
+{% if property.auto_increment %}
+    #[ORM\GeneratedValue]
+{% endif %}
+    #[ORM\Column(type: '{{ property.doctrine_type }}'{% if property.length %}, length: {{ property.length }}{% endif %}{% if not property.nullable %}, nullable: false{% endif %}{% if property.has_enum_class is defined and property.has_enum_class %}, enumType: {{ property.enum_class }}::class{% endif %})]
+{% else %}
+    #[ORM\Column(type: '{{ property.doctrine_type }}'{% if property.length %}, length: {{ property.length }}{% endif %}{% if property.nullable %}, nullable: true{% endif %}{% if property.default is not null %}, options: ['default' => '{{ property.default }}']{% endif %}{% if property.has_enum_class is defined and property.has_enum_class %}, enumType: {{ property.enum_class }}::class{% endif %})]
+{% endif %}
+{% endif %}
+    private {% if property.has_enum_class is defined and property.has_enum_class %}{% if property.nullable %}?{% endif %}{{ property.enum_class }}{% else %}{{ property.type }}{% endif %} ${{ property.name }}{% if property.default is not null and property.type == 'string' %} = '{{ property.default }}'{% elseif property.default is not null and property.default != 'CURRENT_TIMESTAMP' and property.default != 'G' %} = {{ property.default }}{% elseif property.nullable and not property.is_primary %} = null{% endif %};
+
+{% endfor %}
+{% for relation in relations %}
+    /**
+     * {{ relation.type }} relation to {{ relation.target_entity }}
+     */
+{% if use_annotations %}
+    /**
+     * @ORM\ManyToOne(targetEntity="{{ relation.target_entity }}")
+     * @ORM\JoinColumn(name="{{ relation.local_columns[0] }}", referencedColumnName="{{ relation.foreign_columns[0] }}"{% if relation.on_delete %}, onDelete="{{ relation.on_delete }}"{% endif %})
+     */
+{% else %}
+    #[ORM\ManyToOne(targetEntity: {{ relation.target_entity }}::class)]
+    #[ORM\JoinColumn(name: '{{ relation.local_columns[0] }}', referencedColumnName: '{{ relation.foreign_columns[0] }}'{% if relation.on_delete %}, onDelete: '{{ relation.on_delete }}'{% endif %})]
+{% endif %}
+    private {% if relation.nullable %}?{% endif %}{{ relation.target_entity }} ${{ relation.property_name }}{% if relation.nullable %} = null{% endif %};
+
+{% endfor %}
+{% for property in properties %}
+    /**
+     * Getter for {{ property.name }}
+     */
+    public function {{ property.getter_name }}(): {% if property.has_enum_class is defined and property.has_enum_class %}{% if property.nullable %}?{% endif %}{{ property.enum_class }}{% else %}{{ property.type }}{% endif %}
+    {
+        return $this->{{ property.name }};
+    }
+
+    /**
+     * Setter for {{ property.name }}
+     */
+    public function {{ property.setter_name }}({% if property.has_enum_class is defined and property.has_enum_class %}{% if property.nullable %}?{% endif %}{{ property.enum_class }}{% else %}{{ property.type }}{% endif %} ${{ property.name }}): static
+    {
+        $this->{{ property.name }} = ${{ property.name }};
+        return $this;
+    }
+
+{% endfor %}
+{% for relation in relations %}
+    /**
+     * Getter for relation {{ relation.property_name }}
+     */
+    public function {{ relation.getter_name }}(): {% if relation.nullable %}?{% endif %}{{ relation.target_entity }}
+    {
+        return $this->{{ relation.property_name }};
+    }
+
+    /**
+     * Setter for relation {{ relation.property_name }}
+     */
+    public function {{ relation.setter_name }}({% if relation.nullable %}?{% endif %}{{ relation.target_entity }} ${{ relation.property_name }}): static
+    {
+        $this->{{ relation.property_name }} = ${{ relation.property_name }};
+        return $this;
+    }
+
+{% endfor %}
+{% if has_lifecycle_callbacks %}
+{% for property in properties %}
+{% if property.needs_lifecycle_callback %}
+    /**
+     * PrePersist lifecycle callback for {{ property.name }}
+     */
+{% if use_annotations %}
+    /**
+     * @ORM\PrePersist
+     */
+{% else %}
+    #[ORM\PrePersist]
+{% endif %}
+    public function prePersist{{ property.name|title }}(): void
+    {
+        if ($this->{{ property.name }} === null) {
+            $this->{{ property.name }} = new DateTime();
+        }
+    }
+
+{% endif %}
+{% endfor %}
+{% endif %}
+}

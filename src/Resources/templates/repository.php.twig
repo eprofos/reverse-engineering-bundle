@@ -1,0 +1,82 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use {{ entity_namespace }}\{{ entity_name }};
+use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\Persistence\ManagerRegistry;
+
+/**
+ * Repository for entity {{ entity_name }}.
+ * 
+ * @extends ServiceEntityRepository<{{ entity_name }}>
+ */
+class {{ repository_name }} extends ServiceEntityRepository
+{
+    public function __construct(ManagerRegistry $registry)
+    {
+        parent::__construct($registry, {{ entity_name }}::class);
+    }
+
+    /**
+     * Finds an entity by its ID.
+     */
+    public function find($id, $lockMode = null, $lockVersion = null): ?{{ entity_name }}
+    {
+        return parent::find($id, $lockMode, $lockVersion);
+    }
+
+    /**
+     * Finds all entities.
+     *
+     * @return {{ entity_name }}[]
+     */
+    public function findAll(): array
+    {
+        return parent::findAll();
+    }
+
+    /**
+     * Finds entities by criteria.
+     *
+     * @return {{ entity_name }}[]
+     */
+    public function findBy(array $criteria, array $orderBy = null, $limit = null, $offset = null): array
+    {
+        return parent::findBy($criteria, $orderBy, $limit, $offset);
+    }
+
+    /**
+     * Finds one entity by criteria.
+     */
+    public function findOneBy(array $criteria, array $orderBy = null): ?{{ entity_name }}
+    {
+        return parent::findOneBy($criteria, $orderBy);
+    }
+
+    /**
+     * Saves an entity.
+     */
+    public function save({{ entity_name }} $entity, bool $flush = false): void
+    {
+        $this->getEntityManager()->persist($entity);
+
+        if ($flush) {
+            $this->getEntityManager()->flush();
+        }
+    }
+
+    /**
+     * Removes an entity.
+     */
+    public function remove({{ entity_name }} $entity, bool $flush = false): void
+    {
+        $this->getEntityManager()->remove($entity);
+
+        if ($flush) {
+            $this->getEntityManager()->flush();
+        }
+    }
+}

@@ -1,0 +1,50 @@
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        public: false
+
+    # Main bundle services
+    Eprofos\ReverseEngineeringBundle\Service\ReverseEngineeringService:
+        arguments:
+            $config: '%reverse_engineering.config%'
+
+    Eprofos\ReverseEngineeringBundle\Service\DatabaseAnalyzer:
+        arguments:
+            $databaseConfig: '%reverse_engineering.config.database%'
+
+    Eprofos\ReverseEngineeringBundle\Service\MetadataExtractor: ~
+
+    Eprofos\ReverseEngineeringBundle\Service\EnumClassGenerator:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+            $config: '%reverse_engineering.config.generation%'
+
+    Eprofos\ReverseEngineeringBundle\Service\EntityGenerator:
+        arguments:
+            $config: '%reverse_engineering.config.generation%'
+
+    Eprofos\ReverseEngineeringBundle\Service\FileWriter:
+        arguments:
+            $projectDir: '%kernel.project_dir%'
+            $config: '%reverse_engineering.config.generation%'
+
+    # CLI Command
+    Eprofos\ReverseEngineeringBundle\Command\ReverseGenerateCommand:
+        tags:
+            - { name: 'console.command' }
+
+    # Twig configuration for entity generation
+    reverse_engineering.twig:
+        class: Twig\Environment
+        arguments:
+            - '@reverse_engineering.twig_loader'
+            - { cache: false, debug: true }
+
+    reverse_engineering.twig_loader:
+        class: Twig\Loader\FilesystemLoader
+        arguments:
+            - '%kernel.project_dir%/vendor/eprofos/reverse-engineering-bundle/src/Resources/templates'
+
+    # Alias for injection in EntityGenerator
+    Twig\Environment: '@reverse_engineering.twig'

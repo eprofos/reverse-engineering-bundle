@@ -1,0 +1,71 @@
+# Configuration for ReverseEngineeringBundle
+reverse_engineering:
+    # Database configuration
+    database:
+        # Database driver (pdo_mysql, pdo_pgsql, pdo_sqlite)
+        driver: pdo_mysql
+        
+        # Connection parameters
+        host: localhost
+        port: 3306
+        dbname: your_database_name
+        user: your_username
+        password: your_password
+        charset: utf8mb4
+        
+        # For PostgreSQL, use:
+        # driver: pdo_pgsql
+        # port: 5432
+        # charset: utf8
+        
+        # For SQLite, use:
+        # driver: pdo_sqlite
+        # path: '%kernel.project_dir%/var/data.db'
+    
+    # Generation configuration
+    generation:
+        # Namespace for generated entities
+        namespace: App\Entity
+        
+        # Output directory for entities
+        output_dir: src/Entity
+        
+        # Generate Repository classes
+        generate_repository: true
+        
+        # Use annotations instead of PHP 8 attributes
+        use_annotations: false
+        
+        # 🆕 ENUM Support Configuration
+        # Namespace for generated enum classes
+        enum_namespace: App\Enum
+        
+        # Output directory for enum classes
+        enum_output_dir: src/Enum
+        
+        # Specific tables to process (all if empty)
+        tables: []
+        # Example to process only certain tables:
+        # tables:
+        #     - users
+        #     - products
+        #     - orders
+        
+        # Tables to exclude from processing
+        exclude_tables:
+            - doctrine_migration_versions
+            - messenger_messages
+        # Example of additional exclusions:
+        # exclude_tables:
+        #     - cache_items
+        #     - sessions
+        #     - logs
+
+# Example: Custom enum configuration for modular applications
+# reverse_engineering:
+#     generation:
+#         # Custom enum namespace per module
+#         enum_namespace: MyApp\Domain\Enum
+#
+#         # Custom enum output directory
+#         enum_output_dir: src/Domain/Enum

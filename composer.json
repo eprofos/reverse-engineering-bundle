@@ -1,0 +1,146 @@
+{
+    "name": "eprofos/reverse-engineering-bundle",
+    "description": "Advanced Symfony bundle for database reverse engineering - Automatically generates Doctrine entities from existing database schemas with intelligent type mapping, relationship detection, and comprehensive metadata extraction capabilities",
+    "type": "symfony-bundle",
+    "license": "MIT",
+    "keywords": [
+        "symfony",
+        "doctrine",
+        "reverse-engineering",
+        "database",
+        "entity-generation",
+        "orm",
+        "mysql",
+        "postgresql",
+        "sqlite",
+        "code-generation",
+        "legacy-migration",
+        "database-migration"
+    ],
+    "homepage": "https://github.com/eprofos/reverse-engineering-bundle",
+    "readme": "README.md",
+    "authors": [
+        {
+            "name": "Houssem TAYECH",
+            "email": "houssem@eprofos.com",
+            "homepage": "https://www.eprofos.com",
+            "role": "Developer"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/eprofos/reverse-engineering-bundle/issues",
+        "source": "https://github.com/eprofos/reverse-engineering-bundle",
+        "docs": "https://github.com/eprofos/reverse-engineering-bundle#readme",
+        "wiki": "https://github.com/eprofos/reverse-engineering-bundle/wiki"
+    },
+    "funding": [
+        {
+            "type": "github",
+            "url": "https://github.com/sponsors/eprofos"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "symfony/framework-bundle": "^7.0",
+        "symfony/console": "^7.0",
+        "symfony/config": "^7.0",
+        "symfony/dependency-injection": "^7.0",
+        "symfony/http-kernel": "^7.0",
+        "doctrine/dbal": "^3.0",
+        "doctrine/orm": "^2.15|^3.0",
+        "doctrine/doctrine-bundle": "^2.10",
+        "twig/twig": "^3.0",
+        "psr/log": "^3.0",
+        "monolog/monolog": "^3.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.0",
+        "mikey179/vfsstream": "^1.6",
+        "phpstan/phpstan": "^1.10",
+        "phpunit/phpunit": "^10.0",
+        "symfony/dotenv": "^7.3",
+        "symfony/phpunit-bridge": "^7.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Eprofos\\ReverseEngineeringBundle\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Eprofos\\ReverseEngineeringBundle\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "symfony/flex": true,
+            "symfony/runtime": true
+        }
+    },
+    "extra": {
+        "symfony": {
+            "allow-contrib": false,
+            "require": "7.0.*"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": [
+            "phpunit"
+        ],
+        "test-coverage": [
+            "phpunit --coverage-html=coverage/html --coverage-text --coverage-clover=coverage/clover.xml"
+        ],
+        "test-unit": [
+            "phpunit --testsuite=Unit"
+        ],
+        "test-integration": [
+            "phpunit --testsuite=Integration"
+        ],
+        "test-performance": [
+            "phpunit --testsuite=Performance"
+        ],
+        "cs-check": [
+            "php-cs-fixer fix --dry-run --diff"
+        ],
+        "cs-fix": [
+            "php-cs-fixer fix"
+        ],
+        "phpstan": [
+            "phpstan analyse src --level=8"
+        ],
+        "phpstan-baseline": [
+            "phpstan analyse src --level=8 --generate-baseline"
+        ],
+        "quality": [
+            "@phpstan",
+            "@cs-check",
+            "@test"
+        ],
+        "validate": [
+            "@quality",
+            "@test-coverage"
+        ],
+        "post-install-cmd": [
+            "@php bin/console cache:clear --env=test --no-warmup || true"
+        ],
+        "post-update-cmd": [
+            "@php bin/console cache:clear --env=test --no-warmup || true"
+        ]
+    },
+    "scripts-descriptions": {
+        "test": "Run all tests",
+        "test-coverage": "Run tests with coverage reporting",
+        "test-unit": "Run unit tests only",
+        "test-integration": "Run integration tests only",
+        "test-performance": "Run performance tests only",
+        "cs-check": "Check code style without modifications",
+        "cs-fix": "Automatically fix code style issues",
+        "phpstan": "Run static code analysis",
+        "phpstan-baseline": "Generate PHPStan baseline",
+        "quality": "Check overall code quality",
+        "validate": "Complete project validation"
+    }
+}
