@@ -113,11 +113,36 @@ class {{ entity_name }}
 {% endif %}
     private Collection ${{ relation.property_name }};
 
+{% elseif relation.type == 'many_to_many' %}
+    /**
+     * {{ relation.type }} relation to {{ relation.target_entity }}
+     */
+{% if use_annotations %}
+{% if relation.is_owning_side %}
+    /**
+     * @ORM\ManyToMany(targetEntity="{{ relation.target_entity }}", inversedBy="{{ relation.mapped_by }}")
+     * @ORM\JoinTable(name="{{ relation.junction_table }}")
+     */
+{% else %}
+    /**
+     * @ORM\ManyToMany(targetEntity="{{ relation.target_entity }}", mappedBy="{{ relation.mapped_by }}")
+     */
+{% endif %}
+{% else %}
+{% if relation.is_owning_side %}
+    #[ORM\ManyToMany(targetEntity: {{ relation.target_entity }}::class, inversedBy: '{{ relation.mapped_by }}')]
+    #[ORM\JoinTable(name: '{{ relation.junction_table }}')]
+{% else %}
+    #[ORM\ManyToMany(targetEntity: {{ relation.target_entity }}::class, mappedBy: '{{ relation.mapped_by }}')]
+{% endif %}
+{% endif %}
+    private Collection ${{ relation.property_name }};
+
 {% endif %}
 {% endfor %}
 {% set has_collections = false %}
 {% for relation in relations %}
-{% if relation.type == 'one_to_many' %}
+{% if relation.type == 'one_to_many' or relation.type == 'many_to_many' %}
 {% set has_collections = true %}
 {% endif %}
 {% endfor %}
@@ -129,7 +154,7 @@ class {{ entity_name }}
     public function __construct()
     {
 {% for relation in relations %}
-{% if relation.type == 'one_to_many' %}
+{% if relation.type == 'one_to_many' or relation.type == 'many_to_many' %}
         $this->{{ relation.property_name }} = new ArrayCollection();
 {% endif %}
 {% endfor %}
@@ -213,6 +238,48 @@ class {{ entity_name }}
             if (${{ relation.singular_parameter_name }}->{{ 'get' ~ relation.mapped_by|title }}() === $this) {
                 ${{ relation.singular_parameter_name }}->{{ 'set' ~ relation.mapped_by|title }}(null);
             }
+{% endif %}
+        }
+        return $this;
+    }
+
+{% elseif relation.type == 'many_to_many' %}
+    /**
+     * Getter for collection {{ relation.property_name }}
+     */
+    public function {{ relation.getter_name }}(): Collection
+    {
+        return $this->{{ relation.property_name }};
+    }
+
+    /**
+     * Add method for collection {{ relation.property_name }}
+     */
+    public function {{ relation.add_method_name }}({{ relation.target_entity }} ${{ relation.singular_parameter_name }}): static
+    {
+        if (!$this->{{ relation.property_name }}->contains(${{ relation.singular_parameter_name }})) {
+            $this->{{ relation.property_name }}->add(${{ relation.singular_parameter_name }});
+{% if relation.is_owning_side %}
+            // If this is the owning side, no need to set the inverse side
+{% else %}
+            // If this is the inverse side, add this entity to the owning side
+            ${{ relation.singular_parameter_name }}->{{ relation.add_method_name }}($this);
+{% endif %}
+        }
+        return $this;
+    }
+
+    /**
+     * Remove method for collection {{ relation.property_name }}
+     */
+    public function {{ relation.remove_method_name }}({{ relation.target_entity }} ${{ relation.singular_parameter_name }}): static
+    {
+        if ($this->{{ relation.property_name }}->removeElement(${{ relation.singular_parameter_name }})) {
+{% if relation.is_owning_side %}
+            // If this is the owning side, no need to set the inverse side
+{% else %}
+            // If this is the inverse side, remove this entity from the owning side
+            ${{ relation.singular_parameter_name }}->{{ relation.remove_method_name }}($this);
 {% endif %}
         }
         return $this;
