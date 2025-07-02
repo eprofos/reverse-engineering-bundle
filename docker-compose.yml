@@ -1,0 +1,18 @@
+services:
+  php:
+    image: php:8.2-cli
+    container_name: reverse-engineering-bundle-php
+    working_dir: /app
+    volumes:
+      - .:/app
+      - ./php.ini:/usr/local/etc/php/php.ini
+    environment:
+      - COMPOSER_ALLOW_SUPERUSER=1
+    command: bash -c "
+        apt-get update && 
+        apt-get install -y git unzip libzip-dev libsqlite3-dev && 
+        docker-php-ext-install zip pdo pdo_sqlite && 
+        curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && 
+        composer install --no-interaction --optimize-autoloader && 
+        tail -f /dev/null
+      "
