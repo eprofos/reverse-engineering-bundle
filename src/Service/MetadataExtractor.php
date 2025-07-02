@@ -31,6 +31,11 @@ use function in_array;
 class MetadataExtractor
 {
     /**
+     * Current table being processed - used for self-referencing relationship detection.
+     */
+    private ?string $currentTableName = null;
+    
+    /**
      * Constructor - Initializes the metadata extractor with required dependencies.
      *
      * @param DatabaseAnalyzer $databaseAnalyzer Service for analyzing database structure
@@ -63,11 +68,17 @@ class MetadataExtractor
     public function extractTableMetadata(string $tableName, array $allTables = []): array
     {
         $this->logger->info("Starting metadata extraction for table: {$tableName}");
+        
+        // Set current table name for self-referencing relationship detection
+        $this->currentTableName = $tableName;
 
         try {
             // Get raw table details from database analyzer
             $this->logger->debug("Fetching table details for: {$tableName}");
             $tableDetails = $this->databaseAnalyzer->getTableDetails($tableName);
+            
+            // Ensure table_name is set in the details
+            $tableDetails['table_name'] = $tableName;
 
             // Process column definitions and type mappings
             $this->logger->debug("Processing columns for table: {$tableName}", [
@@ -100,7 +111,7 @@ class MetadataExtractor
                 'indexes_processed' => count($indexes),
             ]);
 
-            return [
+            $result = [
                 'table_name'      => $tableName,
                 'entity_name'     => $entityName,
                 'columns'         => $processedColumns,
@@ -109,7 +120,15 @@ class MetadataExtractor
                 'primary_key'     => $tableDetails['primary_key'],
                 'repository_name' => $repositoryName,
             ];
+            
+            // Clear current table name
+            $this->currentTableName = null;
+            
+            return $result;
         } catch (Exception $e) {
+            // Clear current table name on error as well
+            $this->currentTableName = null;
+            
             $this->logger->error("Metadata extraction failed for table: {$tableName}", [
                 'error_message' => $e->getMessage(),
                 'error_trace'   => $e->getTraceAsString(),
@@ -240,6 +259,11 @@ class MetadataExtractor
         $relations         = [];
         $usedPropertyNames = [];
 
+        $this->logger->debug("Extracting relations for table: {$tableDetails['table_name']}", [
+            'foreign_keys_count' => count($tableDetails['foreign_keys']),
+            'all_tables_count'   => count($allTables),
+        ]);
+
         // Relations based on foreign keys (ManyToOne)
         foreach ($tableDetails['foreign_keys'] as $foreignKey) {
             $targetTable  = $foreignKey['foreign_table'];
@@ -261,11 +285,30 @@ class MetadataExtractor
                 'local_columns'   => $foreignKey['local_columns'],
                 'foreign_columns' => $foreignKey['foreign_columns'],
                 'property_name'   => $propertyName,
+                'getter_name'     => 'get' . ucfirst($propertyName),
+                'setter_name'     => 'set' . ucfirst($propertyName),
                 'on_delete'       => $foreignKey['on_delete'],
                 'on_update'       => $foreignKey['on_update'],
                 'nullable'        => $this->isRelationNullable($foreignKey['local_columns'], $tableDetails['columns']),
             ];
+
+            $this->logger->debug("Added ManyToOne relation: {$propertyName}", [
+                'target_entity' => $targetEntity,
+                'target_table'  => $targetTable,
+            ]);
         }
+
+        // Extract OneToMany relationships by analyzing other tables' foreign keys
+        if (! empty($allTables)) {
+            $oneToManyRelations = $this->extractOneToManyRelations($tableDetails['table_name'], $allTables, $usedPropertyNames, $tableDetails);
+            $relations          = array_merge($relations, $oneToManyRelations);
+        }
+
+        $this->logger->info("Extracted relations for table: {$tableDetails['table_name']}", [
+            'total_relations' => count($relations),
+            'many_to_one'     => count(array_filter($relations, static fn($r) => $r['type'] === 'many_to_one')),
+            'one_to_many'     => count(array_filter($relations, static fn($r) => $r['type'] === 'one_to_many')),
+        ]);
 
         return $relations;
     }
@@ -341,6 +384,22 @@ class MetadataExtractor
      */
     private function generateUniqueRelationPropertyName(string $targetTable, string $localColumn, array $usedPropertyNames): string
     {
+        // For self-referencing relationships (same table), prioritize column-based name
+        $isCurrentTable = isset($this->currentTableName) && $this->currentTableName === $targetTable;
+        
+        if ($isCurrentTable) {
+            // For self-referencing, use column name (e.g., parent_id -> parent)
+            $columnBasedName = $this->generatePropertyNameFromColumn($localColumn, $targetTable);
+            
+            // For common self-referencing patterns, use semantic names
+            $columnWithoutId = preg_replace('/_id$/', '', $localColumn);
+            if (in_array($columnWithoutId, ['parent', 'manager', 'leader', 'supervisor'], true)) {
+                return $columnWithoutId;
+            }
+            
+            return $columnBasedName;
+        }
+        
         // Base name based on target table
         $basePropertyName = $this->generateRelationPropertyName($targetTable);
 
@@ -588,5 +647,297 @@ class MetadataExtractor
         }
 
         return false;
+    }
+
+    /**
+     * Extracts OneToMany relationships by analyzing foreign keys from other tables.
+     *
+     * This method identifies inverse relationships by examining foreign key constraints
+     * in other tables that reference the current table. For each such relationship,
+     * it creates a OneToMany relationship definition with proper collection handling.
+     *
+     * @param string $currentTableName The current table being processed
+     * @param array  $allTables        List of all available tables for analysis
+     * @param array  $usedPropertyNames Already used property names to avoid conflicts
+     * @param array  $currentTableDetails Current table details to avoid duplicate calls
+     *
+     * @return array Array of OneToMany relationship definitions
+     */
+    private function extractOneToManyRelations(string $currentTableName, array $allTables, array &$usedPropertyNames, array $currentTableDetails = []): array
+    {
+        $this->logger->debug("Extracting OneToMany relations for table: {$currentTableName}");
+        $oneToManyRelations = [];
+
+        foreach ($allTables as $otherTableName) {
+            // Skip self (will be handled separately for self-referencing)
+            if ($otherTableName === $currentTableName) {
+                continue;
+            }
+
+            try {
+                // Get details of the other table to check its foreign keys
+                $otherTableDetails = $this->databaseAnalyzer->getTableDetails($otherTableName);
+
+                foreach ($otherTableDetails['foreign_keys'] as $foreignKey) {
+                    // Check if this foreign key references our current table
+                    if ($foreignKey['foreign_table'] === $currentTableName) {
+                        $this->logger->debug("Found OneToMany relation: {$currentTableName} -> {$otherTableName}", [
+                            'foreign_key_columns' => $foreignKey['local_columns'],
+                            'referenced_columns'  => $foreignKey['foreign_columns'],
+                        ]);
+
+                        // Generate collection property name (plural form of the referencing table)
+                        $collectionPropertyName = $this->generateCollectionPropertyName($otherTableName, $usedPropertyNames);
+                        $usedPropertyNames[]    = $collectionPropertyName;
+
+                        // Determine the mappedBy property (the ManyToOne property name in the other entity)
+                        $mappedByProperty = $this->generateUniqueRelationPropertyName(
+                            $currentTableName,
+                            $foreignKey['local_columns'][0],
+                            [], // Don't check conflicts for mappedBy, it's in another entity
+                        );
+
+                        $oneToManyRelations[] = [
+                            'type'                   => 'one_to_many',
+                            'target_entity'          => $this->generateEntityName($otherTableName),
+                            'target_table'           => $otherTableName,
+                            'property_name'          => $collectionPropertyName,
+                            'mapped_by'              => $mappedByProperty,
+                            'foreign_key_columns'    => $foreignKey['local_columns'],
+                            'referenced_columns'     => $foreignKey['foreign_columns'],
+                            'getter_name'            => 'get' . ucfirst($collectionPropertyName),
+                            'add_method_name'        => 'add' . ucfirst($this->generateEntityName($otherTableName)),
+                            'remove_method_name'     => 'remove' . ucfirst($this->generateEntityName($otherTableName)),
+                            'singular_parameter_name' => lcfirst($this->generateEntityName($otherTableName)),
+                            'on_delete'              => $foreignKey['on_delete'],
+                            'on_update'              => $foreignKey['on_update'],
+                        ];
+                    }
+                }
+            } catch (Exception $e) {
+                $this->logger->warning("Failed to analyze table {$otherTableName} for OneToMany relations", [
+                    'error' => $e->getMessage(),
+                ]);
+                // Continue processing other tables
+            }
+        }
+
+        // Handle self-referencing relationships (e.g., categories with parent_id)
+        $selfReferencingRelations = $this->extractSelfReferencingOneToManyRelations($currentTableName, $usedPropertyNames, $currentTableDetails);
+        $oneToManyRelations       = array_merge($oneToManyRelations, $selfReferencingRelations);
+
+        $this->logger->debug("Extracted OneToMany relations for {$currentTableName}", [
+            'relations_count'      => count($oneToManyRelations),
+            'self_referencing'     => count($selfReferencingRelations),
+        ]);
+
+        return $oneToManyRelations;
+    }
+
+    /**
+     * Extracts self-referencing OneToMany relationships.
+     *
+     * This method detects self-referencing relationships where a table has foreign keys
+     * that reference its own primary key (e.g., categories with parent_id).
+     *
+     * @param string $tableName         The table name to analyze
+     * @param array  $usedPropertyNames Already used property names to avoid conflicts
+     * @param array  $tableDetails      Table details to avoid duplicate calls
+     *
+     * @return array Array of self-referencing OneToMany relationship definitions
+     */
+    private function extractSelfReferencingOneToManyRelations(string $tableName, array &$usedPropertyNames, array $tableDetails = []): array
+    {
+        $this->logger->debug("Checking for self-referencing relations in table: {$tableName}");
+        $selfReferencingRelations = [];
+
+        try {
+            // Use provided table details or fetch them
+            if (empty($tableDetails)) {
+                $tableDetails = $this->databaseAnalyzer->getTableDetails($tableName);
+            }
+
+            foreach ($tableDetails['foreign_keys'] as $foreignKey) {
+                // Check if this foreign key references the same table
+                if ($foreignKey['foreign_table'] === $tableName) {
+                    $this->logger->debug("Found self-referencing relation in table: {$tableName}", [
+                        'local_columns'   => $foreignKey['local_columns'],
+                        'foreign_columns' => $foreignKey['foreign_columns'],
+                    ]);
+
+                    // Generate collection property name for children (e.g., "children" for parent-child relationship)
+                    $collectionPropertyName = $this->generateSelfReferencingCollectionPropertyName(
+                        $foreignKey['local_columns'][0],
+                        $usedPropertyNames,
+                    );
+                    $usedPropertyNames[] = $collectionPropertyName;
+
+                    // The mappedBy property is the ManyToOne property name (e.g., "parent")
+                    $mappedByProperty = $this->generateUniqueRelationPropertyName(
+                        $tableName,
+                        $foreignKey['local_columns'][0],
+                        [],
+                    );
+
+                    $entityName = $this->generateEntityName($tableName);
+
+                    $selfReferencingRelations[] = [
+                        'type'                    => 'one_to_many',
+                        'target_entity'           => $entityName,
+                        'target_table'            => $tableName,
+                        'property_name'           => $collectionPropertyName,
+                        'mapped_by'               => $mappedByProperty,
+                        'foreign_key_columns'     => $foreignKey['local_columns'],
+                        'referenced_columns'      => $foreignKey['foreign_columns'],
+                        'getter_name'             => 'get' . ucfirst($collectionPropertyName),
+                        'add_method_name'         => 'add' . ucfirst($collectionPropertyName === 'children' ? 'Child' : $entityName),
+                        'remove_method_name'      => 'remove' . ucfirst($collectionPropertyName === 'children' ? 'Child' : $entityName),
+                        'singular_parameter_name' => $collectionPropertyName === 'children' ? 'child' : lcfirst($entityName),
+                        'is_self_referencing'     => true,
+                        'on_delete'               => $foreignKey['on_delete'],
+                        'on_update'               => $foreignKey['on_update'],
+                    ];
+                }
+            }
+        } catch (Exception $e) {
+            $this->logger->warning("Failed to extract self-referencing relations for table {$tableName}", [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $selfReferencingRelations;
+    }
+
+    /**
+     * Generates collection property name for OneToMany relationships.
+     *
+     * This method creates appropriate collection property names for OneToMany relationships
+     * by converting table names to plural camelCase properties.
+     * Examples: 'products' table -> 'products' property, 'category' table -> 'categories' property
+     *
+     * @param string $tableName         The target table name
+     * @param array  $usedPropertyNames Already used property names to avoid conflicts
+     *
+     * @return string The generated collection property name
+     */
+    private function generateCollectionPropertyName(string $tableName, array $usedPropertyNames): string
+    {
+        // Convert table name to camelCase
+        $basePropertyName = $this->generatePropertyName($tableName);
+        
+        // Make it plural if it's not already
+        $pluralPropertyName = $this->pluralizePropertyName($basePropertyName);
+
+        // Handle conflicts by adding suffix
+        $finalPropertyName = $pluralPropertyName;
+        $counter = 1;
+        while (in_array($finalPropertyName, $usedPropertyNames, true)) {
+            $finalPropertyName = $pluralPropertyName . ucfirst((string) $counter);
+            $counter++;
+        }
+
+        $this->logger->debug("Generated collection property name", [
+            'table_name'      => $tableName,
+            'base_name'       => $basePropertyName,
+            'plural_name'     => $pluralPropertyName,
+            'final_name'      => $finalPropertyName,
+        ]);
+
+        return $finalPropertyName;
+    }
+
+    /**
+     * Generates collection property name for self-referencing relationships.
+     *
+     * This method creates appropriate collection property names for self-referencing
+     * OneToMany relationships, typically using semantic names like 'children' for
+     * parent-child relationships.
+     *
+     * @param string $foreignKeyColumn  The foreign key column name (e.g., 'parent_id')
+     * @param array  $usedPropertyNames Already used property names to avoid conflicts
+     *
+     * @return string The generated collection property name
+     */
+    private function generateSelfReferencingCollectionPropertyName(string $foreignKeyColumn, array $usedPropertyNames): string
+    {
+        // Common semantic mappings for self-referencing relationships
+        $semanticMappings = [
+            'parent_id'   => 'children',
+            'manager_id'  => 'subordinates',
+            'leader_id'   => 'members',
+            'category_id' => 'subcategories',
+        ];
+
+        // Try semantic mapping first
+        if (isset($semanticMappings[$foreignKeyColumn])) {
+            $basePropertyName = $semanticMappings[$foreignKeyColumn];
+        } else {
+            // Fall back to generic naming based on column name
+            $columnWithoutId = str_replace('_id', '', $foreignKeyColumn);
+            $basePropertyName = $this->pluralizePropertyName($columnWithoutId);
+        }
+
+        // Handle conflicts
+        $finalPropertyName = $basePropertyName;
+        $counter = 1;
+        while (in_array($finalPropertyName, $usedPropertyNames, true)) {
+            $finalPropertyName = $basePropertyName . ucfirst((string) $counter);
+            $counter++;
+        }
+
+        $this->logger->debug("Generated self-referencing collection property name", [
+            'foreign_key_column' => $foreignKeyColumn,
+            'base_name'          => $basePropertyName,
+            'final_name'         => $finalPropertyName,
+        ]);
+
+        return $finalPropertyName;
+    }
+
+    /**
+     * Pluralizes a property name using basic English pluralization rules.
+     *
+     * @param string $propertyName The singular property name
+     *
+     * @return string The pluralized property name
+     */
+    private function pluralizePropertyName(string $propertyName): string
+    {
+        // Common words that are already plural or should stay unchanged
+        $alreadyPlural = [
+            'products', 'categories', 'users', 'items', 'orders', 'details',
+            'files', 'images', 'documents', 'settings', 'permissions', 'roles',
+            'news', 'series', 'species', 'data', 'information'
+        ];
+        
+        // If the word is already plural, return as-is
+        if (in_array(strtolower($propertyName), $alreadyPlural, true)) {
+            return $propertyName;
+        }
+        
+        // Basic pluralization rules
+        if (str_ends_with($propertyName, 'y') && ! in_array(substr($propertyName, -2, 1), ['a', 'e', 'i', 'o', 'u'], true)) {
+            // Category -> categories
+            return substr($propertyName, 0, -1) . 'ies';
+        }
+
+        if (str_ends_with($propertyName, 's') || str_ends_with($propertyName, 'x') || str_ends_with($propertyName, 'z') || 
+            str_ends_with($propertyName, 'ch') || str_ends_with($propertyName, 'sh')) {
+            // Bus -> buses, Box -> boxes
+            return $propertyName . 'es';
+        }
+
+        if (str_ends_with($propertyName, 'f')) {
+            // Leaf -> leaves
+            return substr($propertyName, 0, -1) . 'ves';
+        }
+
+        if (str_ends_with($propertyName, 'fe')) {
+            // Life -> lives
+            return substr($propertyName, 0, -2) . 'ves';
+        }
+
+        // Default: just add 's'
+        return $propertyName . 's';
     }
 }

@@ -566,4 +566,227 @@ class MetadataExtractorTest extends TestCase
         $this->assertFalse($columnsByName['updated_at']['needs_lifecycle_callback']);
         $this->assertFalse($columnsByName['name']['needs_lifecycle_callback']);
     }
+
+    public function testExtractOneToManyRelationships(): void
+    {
+        // Arrange
+        $currentTableName = 'categories';
+        $allTables = ['categories', 'products'];
+        
+        // Mock current table details (categories)
+        $currentTableDetails = [
+            'table_name'    => 'categories',
+            'columns'       => [
+                [
+                    'name'           => 'id',
+                    'type'           => 'integer',
+                    'length'         => null,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => false,
+                    'default'        => null,
+                    'auto_increment' => true,
+                    'comment'        => 'Primary key',
+                    'property_name'  => 'id',
+                    'is_foreign_key' => false,
+                    'needs_lifecycle_callback' => false,
+                ],
+                [
+                    'name'           => 'name',
+                    'type'           => 'string',
+                    'length'         => 255,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => false,
+                    'default'        => null,
+                    'auto_increment' => false,
+                    'comment'        => 'Category name',
+                    'property_name'  => 'name',
+                    'is_foreign_key' => false,
+                    'needs_lifecycle_callback' => false,
+                ],
+            ],
+            'foreign_keys'  => [],
+            'primary_key'   => ['id'],
+            'indexes'       => [],
+        ];
+
+        // Mock products table details (has foreign key to categories)
+        $productsTableDetails = [
+            'table_name'    => 'products',
+            'columns'       => [
+                [
+                    'name'           => 'id',
+                    'type'           => 'integer',
+                    'length'         => null,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => false,
+                    'default'        => null,
+                    'auto_increment' => true,
+                    'comment'        => 'Primary key',
+                    'property_name'  => 'id',
+                    'is_foreign_key' => false,
+                    'needs_lifecycle_callback' => false,
+                ],
+                [
+                    'name'           => 'category_id',
+                    'type'           => 'integer',
+                    'length'         => null,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => true,
+                    'default'        => null,
+                    'auto_increment' => false,
+                    'comment'        => 'Category foreign key',
+                    'property_name'  => 'categoryId',
+                    'is_foreign_key' => true,
+                    'needs_lifecycle_callback' => false,
+                ],
+            ],
+            'foreign_keys'  => [
+                [
+                    'local_columns'   => ['category_id'],
+                    'foreign_table'   => 'categories',
+                    'foreign_columns' => ['id'],
+                    'on_delete'       => 'CASCADE',
+                    'on_update'       => 'CASCADE',
+                ],
+            ],
+            'primary_key'   => ['id'],
+            'indexes'       => [],
+        ];
+
+        // Set up mock expectations
+        $this->databaseAnalyzer
+            ->expects($this->exactly(2))
+            ->method('getTableDetails')
+            ->willReturnMap([
+                ['categories', $currentTableDetails],
+                ['products', $productsTableDetails],
+            ]);
+
+        // Act
+        $result = $this->metadataExtractor->extractTableMetadata($currentTableName, $allTables);
+
+        // Assert
+        $this->assertIsArray($result);
+        $this->assertEquals('categories', $result['table_name']);
+        $this->assertEquals('Category', $result['entity_name']);
+        
+        // Should have one OneToMany relation to products
+        $this->assertCount(1, $result['relations']);
+        
+        $relation = $result['relations'][0];
+        $this->assertEquals('one_to_many', $relation['type']);
+        $this->assertEquals('Product', $relation['target_entity']);
+        $this->assertEquals('products', $relation['target_table']);
+        $this->assertEquals('products', $relation['property_name']);
+        $this->assertEquals('category', $relation['mapped_by']);
+        $this->assertEquals('getProducts', $relation['getter_name']);
+        $this->assertEquals('addProduct', $relation['add_method_name']);
+        $this->assertEquals('removeProduct', $relation['remove_method_name']);
+        $this->assertEquals('product', $relation['singular_parameter_name']);
+    }
+
+    public function testExtractSelfReferencingOneToManyRelationship(): void
+    {
+        // Arrange
+        $tableName = 'categories';
+        $allTables = ['categories'];
+        
+        // Mock table with self-referencing foreign key
+        $tableDetails = [
+            'table_name'    => 'categories',
+            'columns'       => [
+                [
+                    'name'           => 'id',
+                    'type'           => 'integer',
+                    'length'         => null,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => false,
+                    'default'        => null,
+                    'auto_increment' => true,
+                    'comment'        => 'Primary key',  
+                    'property_name'  => 'id',
+                    'is_foreign_key' => false,
+                    'needs_lifecycle_callback' => false,
+                ],
+                [
+                    'name'           => 'parent_id',
+                    'type'           => 'integer',
+                    'length'         => null,
+                    'precision'      => null,
+                    'scale'          => null,
+                    'nullable'       => true,
+                    'default'        => null,
+                    'auto_increment' => false,
+                    'comment'        => 'Parent category',
+                    'property_name'  => 'parentId',
+                    'is_foreign_key' => true,
+                    'needs_lifecycle_callback' => false,
+                ],
+            ],
+            'foreign_keys'  => [
+                [
+                    'local_columns'   => ['parent_id'],
+                    'foreign_table'   => 'categories',
+                    'foreign_columns' => ['id'],
+                    'on_delete'       => 'CASCADE',
+                    'on_update'       => 'CASCADE',
+                ],
+            ],
+            'primary_key'   => ['id'],
+            'indexes'       => [],
+        ];
+
+        // Set up mock expectations
+        $this->databaseAnalyzer
+            ->expects($this->exactly(1))
+            ->method('getTableDetails')
+            ->with('categories')
+            ->willReturn($tableDetails);
+
+        // Act
+        $result = $this->metadataExtractor->extractTableMetadata($tableName, $allTables);
+
+        // Assert
+        $this->assertIsArray($result);
+        $this->assertEquals('categories', $result['table_name']);
+        $this->assertEquals('Category', $result['entity_name']);
+        
+        // Should have both ManyToOne (parent) and OneToMany (children) relations
+        $this->assertCount(2, $result['relations']);
+        
+        // Find the OneToMany relation
+        $oneToManyRelation = null;
+        $manyToOneRelation = null;
+        
+        foreach ($result['relations'] as $relation) {
+            if ($relation['type'] === 'one_to_many') {
+                $oneToManyRelation = $relation;
+            } elseif ($relation['type'] === 'many_to_one') {
+                $manyToOneRelation = $relation;
+            }
+        }
+        
+        // Verify ManyToOne relation (parent)
+        $this->assertNotNull($manyToOneRelation);
+        $this->assertEquals('many_to_one', $manyToOneRelation['type']);
+        $this->assertEquals('Category', $manyToOneRelation['target_entity']);
+        $this->assertEquals('parent', $manyToOneRelation['property_name']);
+        
+        // Verify OneToMany relation (children)
+        $this->assertNotNull($oneToManyRelation);
+        $this->assertEquals('one_to_many', $oneToManyRelation['type']);
+        $this->assertEquals('Category', $oneToManyRelation['target_entity']);
+        $this->assertEquals('children', $oneToManyRelation['property_name']);
+        $this->assertEquals('parent', $oneToManyRelation['mapped_by']);
+        $this->assertEquals('getChildren', $oneToManyRelation['getter_name']);
+        $this->assertEquals('addChild', $oneToManyRelation['add_method_name']);
+        $this->assertEquals('removeChild', $oneToManyRelation['remove_method_name']);
+        $this->assertEquals('child', $oneToManyRelation['singular_parameter_name']);
+        $this->assertTrue($oneToManyRelation['is_self_referencing']);
+    }
 }

@@ -252,19 +252,32 @@ class EntityGenerator
         $preparedRelations = [];
 
         foreach ($relations as $relation) {
-            $preparedRelations[] = [
-                'type'            => $relation['type'],
-                'property_name'   => $relation['property_name'],
-                'target_entity'   => $relation['target_entity'],
-                'target_table'    => $relation['target_table'] ?? null,
-                'local_columns'   => $relation['local_columns'],
-                'foreign_columns' => $relation['foreign_columns'],
-                'on_delete'       => $relation['on_delete'],
-                'on_update'       => $relation['on_update'],
-                'nullable'        => $relation['nullable'] ?? true,
-                'getter_name'     => $this->generateGetterName($relation['property_name']),
-                'setter_name'     => $this->generateSetterName($relation['property_name']),
+            $preparedRelation = [
+                'type'          => $relation['type'],
+                'property_name' => $relation['property_name'],
+                'target_entity' => $relation['target_entity'],
+                'target_table'  => $relation['target_table'] ?? null,
+                'on_delete'     => $relation['on_delete'] ?? null,
+                'on_update'     => $relation['on_update'] ?? null,
+                'getter_name'   => $relation['getter_name'] ?? $this->generateGetterName($relation['property_name']),
             ];
+
+            if ($relation['type'] === 'many_to_one') {
+                $preparedRelation['local_columns']   = $relation['local_columns'];
+                $preparedRelation['foreign_columns'] = $relation['foreign_columns'];
+                $preparedRelation['nullable']        = $relation['nullable'] ?? true;
+                $preparedRelation['setter_name']     = $relation['setter_name'] ?? $this->generateSetterName($relation['property_name']);
+            } elseif ($relation['type'] === 'one_to_many') {
+                $preparedRelation['mapped_by']                = $relation['mapped_by'];
+                $preparedRelation['foreign_key_columns']      = $relation['foreign_key_columns'] ?? [];
+                $preparedRelation['referenced_columns']       = $relation['referenced_columns'] ?? [];
+                $preparedRelation['add_method_name']          = $relation['add_method_name'];
+                $preparedRelation['remove_method_name']       = $relation['remove_method_name'];
+                $preparedRelation['singular_parameter_name']  = $relation['singular_parameter_name'];
+                $preparedRelation['is_self_referencing']      = $relation['is_self_referencing'] ?? false;
+            }
+
+            $preparedRelations[] = $preparedRelation;
         }
 
         return $preparedRelations;
@@ -279,6 +292,23 @@ class EntityGenerator
 
         // Always use the unified ORM import for both annotation and attribute modes
         $imports[] = 'Doctrine\\ORM\\Mapping as ORM';
+
+        // Check if we have OneToMany relationships that need Collection imports
+        $hasOneToManyRelations = false;
+        if (isset($metadata['relations'])) {
+            foreach ($metadata['relations'] as $relation) {
+                if ($relation['type'] === 'one_to_many') {
+                    $hasOneToManyRelations = true;
+                    break;
+                }
+            }
+        }
+
+        // Add Collection imports for OneToMany relationships
+        if ($hasOneToManyRelations) {
+            $imports[] = 'Doctrine\\Common\\Collections\\ArrayCollection';
+            $imports[] = 'Doctrine\\Common\\Collections\\Collection';
+        }
 
         // Add imports for date types
         foreach ($metadata['columns'] as $column) {

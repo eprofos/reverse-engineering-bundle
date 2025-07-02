@@ -85,6 +85,7 @@ class {{ entity_name }}
 
 {% endfor %}
 {% for relation in relations %}
+{% if relation.type == 'many_to_one' %}
     /**
      * {{ relation.type }} relation to {{ relation.target_entity }}
      */
@@ -99,7 +100,42 @@ class {{ entity_name }}
 {% endif %}
     private {% if relation.nullable %}?{% endif %}{{ relation.target_entity }} ${{ relation.property_name }}{% if relation.nullable %} = null{% endif %};
 
+{% elseif relation.type == 'one_to_many' %}
+    /**
+     * {{ relation.type }} relation to {{ relation.target_entity }}
+     */
+{% if use_annotations %}
+    /**
+     * @ORM\OneToMany(targetEntity="{{ relation.target_entity }}", mappedBy="{{ relation.mapped_by }}")
+     */
+{% else %}
+    #[ORM\OneToMany(targetEntity: {{ relation.target_entity }}::class, mappedBy: '{{ relation.mapped_by }}')]
+{% endif %}
+    private Collection ${{ relation.property_name }};
+
+{% endif %}
 {% endfor %}
+{% set has_collections = false %}
+{% for relation in relations %}
+{% if relation.type == 'one_to_many' %}
+{% set has_collections = true %}
+{% endif %}
+{% endfor %}
+{% if has_collections %}
+
+    /**
+     * Constructor - Initialize collections
+     */
+    public function __construct()
+    {
+{% for relation in relations %}
+{% if relation.type == 'one_to_many' %}
+        $this->{{ relation.property_name }} = new ArrayCollection();
+{% endif %}
+{% endfor %}
+    }
+{% endif %}
+
 {% for property in properties %}
     /**
      * Getter for {{ property.name }}
@@ -120,6 +156,7 @@ class {{ entity_name }}
 
 {% endfor %}
 {% for relation in relations %}
+{% if relation.type == 'many_to_one' %}
     /**
      * Getter for relation {{ relation.property_name }}
      */
@@ -137,6 +174,51 @@ class {{ entity_name }}
         return $this;
     }
 
+{% elseif relation.type == 'one_to_many' %}
+    /**
+     * Getter for collection {{ relation.property_name }}
+     */
+    public function {{ relation.getter_name }}(): Collection
+    {
+        return $this->{{ relation.property_name }};
+    }
+
+    /**
+     * Add method for collection {{ relation.property_name }}
+     */
+    public function {{ relation.add_method_name }}({{ relation.target_entity }} ${{ relation.singular_parameter_name }}): static
+    {
+        if (!$this->{{ relation.property_name }}->contains(${{ relation.singular_parameter_name }})) {
+            $this->{{ relation.property_name }}->add(${{ relation.singular_parameter_name }});
+{% if not relation.is_self_referencing is defined or not relation.is_self_referencing %}
+            ${{ relation.singular_parameter_name }}->{{ relation.setter_name|default('set' ~ relation.mapped_by|title) }}($this);
+{% else %}
+            ${{ relation.singular_parameter_name }}->{{ 'set' ~ relation.mapped_by|title }}($this);
+{% endif %}
+        }
+        return $this;
+    }
+
+    /**
+     * Remove method for collection {{ relation.property_name }}
+     */
+    public function {{ relation.remove_method_name }}({{ relation.target_entity }} ${{ relation.singular_parameter_name }}): static
+    {
+        if ($this->{{ relation.property_name }}->removeElement(${{ relation.singular_parameter_name }})) {
+{% if not relation.is_self_referencing is defined or not relation.is_self_referencing %}
+            if (${{ relation.singular_parameter_name }}->{{ relation.getter_name|default('get' ~ relation.mapped_by|title) }}() === $this) {
+                ${{ relation.singular_parameter_name }}->{{ relation.setter_name|default('set' ~ relation.mapped_by|title) }}(null);
+            }
+{% else %}
+            if (${{ relation.singular_parameter_name }}->{{ 'get' ~ relation.mapped_by|title }}() === $this) {
+                ${{ relation.singular_parameter_name }}->{{ 'set' ~ relation.mapped_by|title }}(null);
+            }
+{% endif %}
+        }
+        return $this;
+    }
+
+{% endif %}
 {% endfor %}
 {% if has_lifecycle_callbacks %}
 {% for property in properties %}
