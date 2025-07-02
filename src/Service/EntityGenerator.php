@@ -275,6 +275,21 @@ class EntityGenerator
                 $preparedRelation['remove_method_name']       = $relation['remove_method_name'];
                 $preparedRelation['singular_parameter_name']  = $relation['singular_parameter_name'];
                 $preparedRelation['is_self_referencing']      = $relation['is_self_referencing'] ?? false;
+            } elseif ($relation['type'] === 'many_to_many') {
+                $preparedRelation['junction_table']           = $relation['junction_table'];
+                $preparedRelation['is_owning_side']           = $relation['is_owning_side'] ?? true;
+                $preparedRelation['add_method_name']          = $relation['add_method_name'];
+                $preparedRelation['remove_method_name']       = $relation['remove_method_name'];
+                $preparedRelation['singular_parameter_name']  = $relation['singular_parameter_name'];
+                
+                // Both sides need mapped_by for templating
+                $preparedRelation['mapped_by']                = $relation['mapped_by'] ?? '';
+                
+                // Owning side specific properties
+                if ($relation['is_owning_side'] ?? true) {
+                    $preparedRelation['join_columns']         = $relation['join_columns'] ?? [];
+                    $preparedRelation['inverse_join_columns'] = $relation['inverse_join_columns'] ?? [];
+                }
             }
 
             $preparedRelations[] = $preparedRelation;

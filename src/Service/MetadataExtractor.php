@@ -302,12 +302,17 @@ class MetadataExtractor
         if (! empty($allTables)) {
             $oneToManyRelations = $this->extractOneToManyRelations($tableDetails['table_name'], $allTables, $usedPropertyNames, $tableDetails);
             $relations          = array_merge($relations, $oneToManyRelations);
+            
+            // Extract ManyToMany relationships by analyzing junction tables
+            $manyToManyRelations = $this->extractManyToManyRelations($tableDetails['table_name'], $allTables, $usedPropertyNames);
+            $relations = array_merge($relations, $manyToManyRelations);
         }
 
         $this->logger->info("Extracted relations for table: {$tableDetails['table_name']}", [
             'total_relations' => count($relations),
             'many_to_one'     => count(array_filter($relations, static fn($r) => $r['type'] === 'many_to_one')),
             'one_to_many'     => count(array_filter($relations, static fn($r) => $r['type'] === 'one_to_many')),
+            'many_to_many'    => count(array_filter($relations, static fn($r) => $r['type'] === 'many_to_many')),
         ]);
 
         return $relations;
@@ -939,5 +944,323 @@ class MetadataExtractor
 
         // Default: just add 's'
         return $propertyName . 's';
+    }
+
+    /**
+     * Extracts ManyToMany relationships by analyzing junction tables.
+     *
+     * @param string $currentTableName Current table name
+     * @param array  $allTables        All available tables
+     * @param array  $usedPropertyNames Array of already used property names (by reference)
+     *
+     * @return array Array of ManyToMany relationship definitions
+     */
+    private function extractManyToManyRelations(string $currentTableName, array $allTables, array &$usedPropertyNames): array
+    {
+        $this->logger->debug("Extracting ManyToMany relations for table: {$currentTableName}");
+        $manyToManyRelations = [];
+
+        // First, identify potential junction tables by naming convention
+        $potentialJunctionTables = [];
+        foreach ($allTables as $tableName) {
+            if ($tableName === $currentTableName) {
+                continue;
+            }
+            
+            // Check if table name suggests it might be a junction table involving current table
+            if ($this->couldBeJunctionTableFor($tableName, $currentTableName, $allTables)) {
+                $potentialJunctionTables[] = $tableName;
+            }
+        }
+
+        $this->logger->debug("Potential junction tables for {$currentTableName}: " . implode(', ', $potentialJunctionTables));
+
+        // Only check the potential junction tables
+        foreach ($potentialJunctionTables as $potentialJunctionTable) {
+            try {
+                $junctionTableDetails = $this->databaseAnalyzer->getTableDetails($potentialJunctionTable);
+                
+                // Check if this is a junction table that connects our current table
+                if ($this->isJunctionTable($junctionTableDetails, $allTables)) {
+                    $foreignKeys = $junctionTableDetails['foreign_keys'] ?? [];
+                    $primaryKey = $junctionTableDetails['primary_key'] ?? [];
+                    
+                    // Find the primary relationship foreign keys (those that are part of the primary key)
+                    $primaryRelationshipFKs = [];
+                    foreach ($foreignKeys as $fk) {
+                        $fkColumns = $fk['local_columns'];
+                        $isPartOfPrimaryKey = !empty(array_intersect($fkColumns, $primaryKey));
+                        
+                        if ($isPartOfPrimaryKey) {
+                            $primaryRelationshipFKs[] = $fk;
+                        }
+                    }
+                    
+                    // Find if this junction table connects to our current table via primary relationship
+                    $connectsToCurrentTable = false;
+                    $otherTable = null;
+                    
+                    foreach ($primaryRelationshipFKs as $fk) {
+                        if ($fk['foreign_table'] === $currentTableName) {
+                            $connectsToCurrentTable = true;
+                        } else {
+                            // For self-referencing, the "other table" might be the same as current table
+                            // For regular ManyToMany, it will be a different table
+                            $otherTable = $fk['foreign_table'];
+                        }
+                    }
+
+                    // For self-referencing relationships, if all FKs point to the same table, 
+                    // we still want to create the relationship
+                    if ($connectsToCurrentTable && ($otherTable !== null || count($primaryRelationshipFKs) === 2)) {
+                        // For self-referencing, use the current table as the "other" table
+                        if ($otherTable === null || $otherTable === $currentTableName) {
+                            $otherTable = $currentTableName;
+                        }
+                        
+                        $this->logger->debug("Found ManyToMany relationship: {$currentTableName} <-> {$otherTable} via {$potentialJunctionTable}");
+
+                        // Generate collection property name for the ManyToMany relationship
+                        if ($otherTable === $currentTableName) {
+                            // For self-referencing, use a more descriptive name based on the junction table
+                            $collectionPropertyName = $this->generateSelfReferencingCollectionName($potentialJunctionTable, $usedPropertyNames);
+                        } else {
+                            $collectionPropertyName = $this->generateCollectionPropertyName($otherTable, $usedPropertyNames);
+                        }
+                        $usedPropertyNames[] = $collectionPropertyName;
+
+                        // Determine owning vs inverse side (alphabetically first table is owning side)
+                        // For self-referencing, we always make it owning side
+                        $isOwningSide = ($otherTable === $currentTableName) || ($currentTableName <= $otherTable);
+                        
+                        $manyToManyRelation = [
+                            'type'                     => 'many_to_many',
+                            'target_entity'            => $this->generateEntityName($otherTable),
+                            'target_table'             => $otherTable,
+                            'junction_table'           => $potentialJunctionTable,
+                            'property_name'            => $collectionPropertyName,
+                            'is_owning_side'           => $isOwningSide,
+                            'getter_name'              => 'get' . ucfirst($collectionPropertyName),
+                            'add_method_name'          => 'add' . ucfirst($this->generateEntityName($otherTable)),
+                            'remove_method_name'       => 'remove' . ucfirst($this->generateEntityName($otherTable)),
+                            'singular_parameter_name'  => lcfirst($this->generateEntityName($otherTable)),
+                        ];
+
+                        // Add specific attributes based on owning/inverse side
+                        if ($isOwningSide) {
+                            // Owning side uses JoinTable
+                            $manyToManyRelation['junction_table'] = $potentialJunctionTable;
+                            // Provide mapped_by for owning side to support inversedBy in entity template
+                            $manyToManyRelation['mapped_by'] = $this->generateCollectionPropertyName($currentTableName, []);
+                            
+                            // Find the join columns from primary relationship foreign keys
+                            foreach ($primaryRelationshipFKs as $fk) {
+                                if ($fk['foreign_table'] === $currentTableName) {
+                                    $manyToManyRelation['join_columns'] = [
+                                        'name' => $fk['local_columns'][0],
+                                        'referenced_column_name' => $fk['foreign_columns'][0],
+                                    ];
+                                } elseif ($fk['foreign_table'] === $otherTable) {
+                                    $manyToManyRelation['inverse_join_columns'] = [
+                                        'name' => $fk['local_columns'][0], 
+                                        'referenced_column_name' => $fk['foreign_columns'][0],
+                                    ];
+                                }
+                            }
+                        } else {
+                            // Inverse side uses mappedBy
+                            $manyToManyRelation['mapped_by'] = $this->generateCollectionPropertyName($currentTableName, []);
+                        }
+
+                        $manyToManyRelations[] = $manyToManyRelation;
+                    }
+                }
+            } catch (Exception $e) {
+                $this->logger->warning("Failed to analyze potential junction table {$potentialJunctionTable}", [
+                    'error' => $e->getMessage(),
+                ]);
+                // Continue processing other tables
+            }
+        }
+
+        $this->logger->debug("Extracted ManyToMany relations for {$currentTableName}", [
+            'relations_count' => count($manyToManyRelations),
+        ]);
+
+        return $manyToManyRelations;
+    }
+
+    /**
+     * Check if a table name suggests it could be a junction table for the given table.
+     *
+     * @param string $tableName        The table to check
+     * @param string $currentTableName The current table being processed
+     * @param array  $allTables        All available tables
+     *
+     * @return bool True if the table name suggests it could be a junction table
+     */
+    private function couldBeJunctionTableFor(string $tableName, string $currentTableName, array $allTables): bool
+    {
+        // Check if the table name contains the current table name
+        if (str_contains($tableName, $currentTableName) || str_contains($tableName, substr($currentTableName, 0, -1))) {
+            return true;
+        }
+
+        // Check against other table names to see if it could be a junction between current table and another
+        foreach ($allTables as $otherTable) {
+            if ($otherTable === $currentTableName || $otherTable === $tableName) {
+                continue;
+            }
+
+            // Check common junction patterns
+            $patterns = [
+                $currentTableName . '_' . $otherTable,
+                $otherTable . '_' . $currentTableName,
+                substr($currentTableName, 0, -1) . '_' . substr($otherTable, 0, -1), // singular forms
+            ];
+
+            foreach ($patterns as $pattern) {
+                if ($tableName === $pattern) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if a table is a junction table based on its structure.
+     *
+     * @param array $tableDetails Table structure details
+     * @param array $allTables    List of all available tables for reference validation
+     *
+     * @return bool True if the table is identified as a junction table
+     */
+    private function isJunctionTable(array $tableDetails, array $allTables = []): bool
+    {
+        $tableName = $tableDetails['table_name'] ?? $tableDetails['name'] ?? '';
+        $foreignKeys = $tableDetails['foreign_keys'] ?? [];
+        $columns = $tableDetails['columns'] ?? [];
+        $primaryKey = $tableDetails['primary_key'] ?? [];
+
+        if (empty($tableName)) {
+            return false;
+        }
+
+        $this->logger->debug("Analyzing table for junction table characteristics: {$tableName}", [
+            'foreign_keys_count' => count($foreignKeys),
+            'columns_count'      => count($columns),
+            'primary_key_count'  => count($primaryKey),
+        ]);
+
+        // Must have at least 2 foreign keys for ManyToMany (can have more for metadata)
+        if (count($foreignKeys) < 2) {
+            return false;
+        }
+
+        // For junction tables with metadata, we need to identify the primary relationship
+        // The primary relationship should have exactly 2 foreign keys that form the composite PK
+        $primaryRelationTables = [];
+        $primaryKeyForeignKeys = [];
+        
+        // Find foreign keys that are part of the primary key
+        foreach ($foreignKeys as $fk) {
+            $fkColumns = $fk['local_columns'];
+            $isPartOfPrimaryKey = !empty(array_intersect($fkColumns, $primaryKey));
+            
+            if ($isPartOfPrimaryKey) {
+                $primaryRelationTables[] = $fk['foreign_table'];
+                $primaryKeyForeignKeys[] = $fk;
+            }
+        }
+        
+        // Should have exactly 2 foreign keys in the primary relationship
+        // This handles both regular ManyToMany (2 different tables) and self-referencing (same table twice)
+        if (count($primaryKeyForeignKeys) !== 2) {
+            return false;
+        }
+
+        $uniquePrimaryTables = array_unique($primaryRelationTables);
+        
+        // For self-referencing ManyToMany, we have 1 unique table but 2 foreign keys
+        // For regular ManyToMany, we have 2 unique tables and 2 foreign keys
+        if (count($uniquePrimaryTables) !== 1 && count($uniquePrimaryTables) !== 2) {
+            return false;
+        }
+
+        // Verify that all referenced tables exist in our table list
+        foreach ($uniquePrimaryTables as $refTable) {
+            if (!in_array($refTable, $allTables, true)) {
+                return false;
+            }
+        }
+
+        // Check if the primary key is composed of the primary foreign key columns
+        $primaryForeignKeyColumns = [];
+        foreach ($primaryKeyForeignKeys as $fk) {
+            $primaryForeignKeyColumns = array_merge($primaryForeignKeyColumns, $fk['local_columns']);
+        }
+
+        // For a junction table, primary key should include the primary foreign key columns
+        $primaryKeysMatch = empty(array_diff($primaryForeignKeyColumns, $primaryKey));
+
+        if (!$primaryKeysMatch) {
+            return false;
+        }
+
+        // Check for additional metadata columns (columns that are neither primary foreign keys nor part of standard junction pattern)
+        $nonPrimaryForeignKeyColumns = array_filter($columns, function($column) use ($primaryForeignKeyColumns) {
+            return !in_array($column['name'], $primaryForeignKeyColumns, true);
+        });
+
+        $metadataColumnsCount = count($nonPrimaryForeignKeyColumns);
+        
+        // Allow reasonable number of metadata columns (configurable in future)
+        if ($metadataColumnsCount > 5) {
+            return false;
+        }
+
+        $this->logger->info("Table {$tableName} identified as junction table", [
+            'primary_relationship_tables' => $uniquePrimaryTables,
+            'total_foreign_keys'         => count($foreignKeys),
+            'primary_foreign_keys'       => count($primaryKeyForeignKeys),
+            'metadata_columns_count'     => $metadataColumnsCount,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Generates a collection property name for self-referencing ManyToMany relationships.
+     *
+     * @param string $junctionTableName The junction table name
+     * @param array  $usedPropertyNames Already used property names
+     *
+     * @return string The generated collection property name
+     */
+    private function generateSelfReferencingCollectionName(string $junctionTableName, array $usedPropertyNames): string
+    {
+        // Try to extract a meaningful name from the junction table
+        // e.g., user_friends -> friends
+        $parts = explode('_', $junctionTableName);
+        
+        if (count($parts) >= 2) {
+            // Use the last part as the collection name
+            $collectionName = end($parts);
+        } else {
+            // Fallback to a generic name
+            $collectionName = 'relatedItems';
+        }
+        
+        // Ensure it's not already used
+        $originalName = $collectionName;
+        $counter = 1;
+        while (in_array($collectionName, $usedPropertyNames, true)) {
+            $collectionName = $originalName . $counter;
+            $counter++;
+        }
+        
+        return $collectionName;
     }
 }
